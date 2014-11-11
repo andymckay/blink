@@ -1,0 +1,17 @@
+daemon off;
+master_process off;
+
+events {
+}
+
+http {
+    types {
+        application/json    json;
+        text/html           html;
+    }
+    etag on;
+    server {
+        listen 8000;
+        root %(path)s/files;
+    }
+}

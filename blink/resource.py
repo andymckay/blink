@@ -7,7 +7,7 @@ from urllib.parse import urlparse, urlunparse
 
 import requests
 
-from blink.cache import NullCache
+from blink.cache import DictCache
 
 STATUS_1xx = re.compile('^1\d\d$')
 log = logging.getLogger('blink.client')
@@ -16,7 +16,7 @@ log = logging.getLogger('blink.client')
 class JSONParser(object):
 
     def __call__(self, reply):
-        return json.loads(reply.content)
+        return reply.json()
 
 
 class NullParser(object):
@@ -37,29 +37,46 @@ class Response(object):
         self.data = None
         self.parser = self.find_parser()
         self.find_status()
+        self.parsed = False
 
     def has_status_code(self, *ranges):
         for code in ranges:
             try:
-                res = code.match(self.reply.status_code)
+                res = code.match(str(self.reply.status_code))
             except AttributeError:
                 res = str(code) == self.reply.status_code
             if res:
                 return res
 
-    def should_parse(self):
-        if self.has_status_code(STATUS_1xx, 204, 304):
+    def get_length(self):
+        length = self.reply.headers.get('Content-Length', None)
+        if not length:
             return False
 
-        if self.reply.headers.get('Content-Length') == 0:
+        try:
+            length = int(length)
+        except:
+            log.info('[Response] content-length not an int')
+            raise
+
+        return length
+
+    def should_parse(self):
+        length = self.get_length()
+
+        if not length:
+            log.info('[Response] no content-length using NullParser')
+            return False
+
+        if self.has_status_code(STATUS_1xx, 204, 304):
+            log.info('[Response] status code is {code} using NullParser'
+                     .format(code=str(self.reply.status_code)))
             return False
 
         return True
 
     def find_parser(self):
-        length = self.reply.headers.get('Content-Length', None)
-        if not length:
-            log.info('[Response] no content-length using NullParser')
+        if not self.should_parse():
             return NullParser()
 
         content_type = self.reply.headers.get('Content-Type')
@@ -92,15 +109,19 @@ class Request(object):
         if not (server.scheme and server.netloc):
             raise ValueError('Server must specify a scheme and netloc.')
         self.server = server
-        self.cache = cache or NullCache()
         self.id = None
+        self.url = ''
+        self.kw = {}
 
-    def __call__(self, attr, url):
+    def config(self, method, url):
+        self.method = method
+        self.url = self.merge(url)
         self.set_id(url)
-        method = getattr(self, attr)
-        url = self.merge(url)
-        log.info('[Request] GET {0}'.format(url))
-        return method(url)
+
+    def call(self):
+        method = getattr(self, self.method)
+        log.info('[Request] GET {0}'.format(self.url))
+        return method(self.url)
 
     def merge(self, url):
         """
@@ -116,33 +137,38 @@ class Request(object):
     def set_id(self, url):
         self.id = md5(url.encode('punycode')).hexdigest()
 
-    def GET(self, url):
-        lookup = self.cache.get_etag(self)
-        if lookup:
-            log.info('[Request] returning cached value based on etag')
-            return lookup
-        return requests.get(self.merge(url))
+    def get(self, url):
+        return requests.get(self.merge(url), **self.kw)
 
 
 class Resource(object):
 
-    def config(self, pre=None, request=None, response=None, post=None):
-        self.pre = pre or []
-        self.post = post or []
-        self.request = request or Request(self.server)
-        self.response = response or Response(self.request)
+    def config(self, cache=None, middleware=None):
+        self.cache = (cache or DictCache)()
+        self.middleware = middleware or []
+        if not isinstance(self.middleware, (list, tuple)):
+            self.middleware = self.middleware,
+        self.request = Request(self.server)
+        self.response = Response(self.request)
 
     def __init__(self, server):
         self.server = urlparse(server)
 
     def process(self, attr, url):
-        for middleware in self.pre:
-            middleware.pre(request=self.request)
+        self.request.config(attr, url)
 
-        reply = getattr(self.request, attr)(url)
-        response = self.response(reply)
+        for middleware in self.middleware:
+            mw = middleware(cache=self.cache, request=self.request)
+            if hasattr(mw, 'pre') and callable(mw.pre):
+                mw.pre()
 
-        for middleware in self.post:
-            middleware.post(request=self.request, response=response)
+        reply = self.request.call()
+        self.response(reply)
 
-        return response
+        for middleware in self.middleware:
+            mw = middleware(cache=self.cache, request=self.request,
+                            response=self.response)
+            if hasattr(mw, 'pre') and callable(mw.post):
+                mw.post()
+
+        return self

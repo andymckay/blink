@@ -1,51 +1,41 @@
 import logging
 
-log = logging.getLogger('blink.client')
+try:
+    import memcache
+    HAS_MEMCACHE = True
+except ImportError:
+    HAS_MEMCACHE = False
+
+log = logging.getLogger('blink.client.cache')
 
 _cache = {
-    'etags_to_replies': {},
+    'etag_to_response': {},
     'request_to_etag': {}
 }
 
 
-class NullCache(object):
-
-    def add_etag(self, etag, request, response):
-        """ """
-
-    def get_cache(self):
-        """ """
-
-    def get_response(self, request):
-        """ """
-
-    def get_etag(self, request):
-        """ """
-
-
 class DictCache(object):
 
-    def get_cache(self):
-        return _cache
+    def __init__(self):
+        self.cache = {}
 
-    def add_etag(self, etag, request, response):
-        _cache['etags_to_replies'][etag] = response
-        _cache['request_to_etag'][request.id] = etag
-        log.info('[Cache] caching response based on etag')
+    def set(self, key, value):
+        self.cache[key] = value
 
-    def get_response(self, request):
-        etag = self.get_etag(request)
-        if not etag:
-            return
+    def get(self, key):
+        return self.cache.get(key)
 
-        log.info('[Cache] found cached response based on etag')
-        return _cache['etags_to_replies'].get(etag)
 
-    def get_etag(self, request):
-        log.info('[Cache] looking for cached etag: {0}'.format(request.id))
-        etag = _cache['request_to_etag'].get(request.id)
-        if not etag:
-            return
+class MemCache(object):
 
-        log.info('[Cache] found cached etag')
-        return etag
+    def __init__(self):
+        self.prefix = 'blink.client'
+        self.client = memcache.Client(['127.0.0.1:11211'], debug=0)
+
+    def set(self, key, value):
+        log.info('[Memcache] setting {0}'.format(key))
+        self.client.set('{0}:{1}'.format(self.prefix, key), value)
+
+    def get(self, key):
+        log.info('[Memcache] getting {0}'.format(key))
+        return self.client.get('{0}:{1}'.format(self.prefix, key))
