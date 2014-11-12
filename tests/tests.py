@@ -27,27 +27,6 @@ class FakeRequests(TestCase):
         self.addCleanup(patcher.stop)
 
 
-class TestCache(TestCase):
-
-    def setUp(self):
-        self.cache = DictCache()
-        self.request = FakeRequest()
-        self.response = FakeResponse()
-
-    def test_good(self):
-        self.cache.add_etag('f', self.request, self.response)
-        assert self.cache.get_response(self.request) == self.response
-
-    def test_no_etag(self):
-        self.cache.add_etag('f', self.request, self.response)
-        self.request.id = 'b'
-        assert self.cache.get_response(self.request) == None
-
-    def test_etag(self):
-        self.cache.add_etag('f', self.request, self.response)
-        assert self.cache.get_etag(self.request) == 'f'
-
-
 class TestRequest(FakeRequests):
 
     def test_server(self):
@@ -71,7 +50,7 @@ class TestRequest(FakeRequests):
 
     def test_get(self):
         req = Request(urlparse('http://f.c'))
-        req.GET('/b')
+        req.get('/b')
         self.mock.assert_called_with('http://f.c/b')
 
 
@@ -121,7 +100,7 @@ class TestResource(FakeRequests):
     def test(self):
         res = Resource('http://f.com')
         res.config()
-        res.process('GET', '/b')
+        res.process('get', '/b')
 
 
 if __name__=='__main__':
